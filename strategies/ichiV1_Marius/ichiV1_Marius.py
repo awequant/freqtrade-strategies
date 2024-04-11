@@ -1,42 +1,33 @@
 # --- Do not remove these libs ---
-from sqlalchemy import true
-from freqtrade.strategy.interface import IStrategy
-from pandas import DataFrame, Series
-import copy
 import logging
-import pathlib
-import rapidjson
-import talib.abstract as ta
+
 import freqtrade.vendor.qtpylib.indicators as qtpylib
 import pandas as pd  # noqa
+import talib.abstract as ta
+from freqtrade.strategy.interface import IStrategy
+from pandas import DataFrame
 
 pd.options.mode.chained_assignment = None  # default='warn'
-import technical.indicators as ftt
-from freqtrade.exchange import timeframe_to_prev_date
-from functools import reduce
-from datetime import datetime, timedelta, timezone
-import numpy as np
-from technical.util import resample_to_interval, resampled_merge
-from freqtrade.strategy import informative
-from freqtrade.strategy import stoploss_from_open
-from freqtrade.strategy import (
-    BooleanParameter,
-    timeframe_to_minutes,
-    merge_informative_pair,
-    DecimalParameter,
-    IntParameter,
-    CategoricalParameter,
-)
-from freqtrade.persistence import Trade
-from typing import Dict
-import numpy  # noqa
-import math
-import pandas_ta as pta
-from typing import List
-from skopt.space import Dimension, Integer
 import time
+from datetime import datetime, timedelta
+from functools import reduce
+from typing import Dict, List
 from warnings import simplefilter
 
+import numpy as np
+import technical.indicators as ftt
+from freqtrade.persistence import Trade
+from freqtrade.strategy import (
+    BooleanParameter,
+    CategoricalParameter,
+    DecimalParameter,
+    IntParameter,
+    informative,
+    merge_informative_pair,
+    stoploss_from_open,
+    timeframe_to_minutes,
+)
+from skopt.space import Dimension, Integer
 from technical.indicators import zema
 
 logger = logging.getLogger(__name__)
@@ -60,12 +51,12 @@ def max_pump_detect_price_15m(dataframe, period=14, pause=288):
     countdown = 0
     for i in range(period):
 
-        cumulativeup = cumulativeup + df["volume"].shift(i) * df["size"].shift(
-            i
-        ) * np.where(df["close"].shift(i) > df["open"].shift(i), 1, 0)
-        cumulativedown = cumulativedown + df["volume"].shift(i) * df["size"].shift(
-            i
-        ) * np.where(df["close"].shift(i) > df["open"].shift(i), 0, 1)
+        cumulativeup = cumulativeup + df["volume"].shift(i) * df["size"].shift(i) * np.where(
+            df["close"].shift(i) > df["open"].shift(i), 1, 0
+        )
+        cumulativedown = cumulativedown + df["volume"].shift(i) * df["size"].shift(i) * np.where(
+            df["close"].shift(i) > df["open"].shift(i), 0, 1
+        )
 
     flow_price = cumulativeup - cumulativedown
     flow_price_normalized = flow_price / (
@@ -85,12 +76,12 @@ def flow_price_15m(dataframe, period=14, pause=288):
     countdown = 0
     for i in range(period):
 
-        cumulativeup = cumulativeup + df["volume"].shift(i) * df["size"].shift(
-            i
-        ) * np.where(df["close"].shift(i) > df["open"].shift(i), 1, 0)
-        cumulativedown = cumulativedown + df["volume"].shift(i) * df["size"].shift(
-            i
-        ) * np.where(df["close"].shift(i) > df["open"].shift(i), 0, 1)
+        cumulativeup = cumulativeup + df["volume"].shift(i) * df["size"].shift(i) * np.where(
+            df["close"].shift(i) > df["open"].shift(i), 1, 0
+        )
+        cumulativedown = cumulativedown + df["volume"].shift(i) * df["size"].shift(i) * np.where(
+            df["close"].shift(i) > df["open"].shift(i), 0, 1
+        )
 
     flow_price = cumulativeup - cumulativedown
     flow_price_normalized = flow_price / (
@@ -185,9 +176,7 @@ class ichiV1_Marius(IStrategy):
     }
 
     # minimum conditions to match in buy
-    buy_minimum_conditions = IntParameter(
-        1, 2, default=1, space="buy", optimize=False, load=True
-    )
+    buy_minimum_conditions = IntParameter(1, 2, default=1, space="buy", optimize=False, load=True)
 
     position_adjustment_enable = True
     max_dca_orders = 2
@@ -204,14 +193,8 @@ class ichiV1_Marius(IStrategy):
         max_stake: float,
         **kwargs,
     ) -> float:
-        if (self.config["position_adjustment_enable"] == True) and (
-            self.config["stake_amount"] == "unlimited"
-        ):
-            return (
-                self.wallets.get_total_stake_amount()
-                / self.config["max_open_trades"]
-                / self.max_dca_multiplier
-            )
+        if (self.config["position_adjustment_enable"] == True) and (self.config["stake_amount"] == "unlimited"):
+            return self.wallets.get_total_stake_amount() / self.config["max_open_trades"] / self.max_dca_multiplier
         else:
             return proposed_stake
 
@@ -250,34 +233,20 @@ class ichiV1_Marius(IStrategy):
         return None
 
     # Pump protection
-    pump_period = IntParameter(
-        5, 24, default=buy_params["pump_period"], space="buy", optimize=False
-    )
-    pump_limit = IntParameter(
-        100, 10000, default=buy_params["pump_limit"], space="buy", optimize=True
-    )
+    pump_period = IntParameter(5, 24, default=buy_params["pump_period"], space="buy", optimize=False)
+    pump_limit = IntParameter(100, 10000, default=buy_params["pump_limit"], space="buy", optimize=True)
     pump_recorver_price = DecimalParameter(
         1.0, 1.3, default=buy_params["pump_recorver_price"], space="buy", optimize=True
     )
-    pump_pause_duration = IntParameter(
-        6, 500, default=buy_params["pump_pause_duration"], space="buy", optimize=True
-    )
+    pump_pause_duration = IntParameter(6, 500, default=buy_params["pump_pause_duration"], space="buy", optimize=True)
 
     ##################################################################
     ## Slippage params
     is_optimize_slip = False
-    max_slip = DecimalParameter(
-        0.33, 0.80, default=0.33, decimals=3, optimize=is_optimize_slip, load=True
-    )
-    buy_btc_safe = IntParameter(
-        -300, 50, default=buy_params["buy_btc_safe"], optimize=True
-    )
-    buy_btc_safe_1d = DecimalParameter(
-        -0.5, -0.015, default=buy_params["buy_btc_safe_1d"], optimize=True
-    )
-    antipump_threshold = DecimalParameter(
-        0, 0.4, default=buy_params["antipump_threshold"], space="buy", optimize=True
-    )
+    max_slip = DecimalParameter(0.33, 0.80, default=0.33, decimals=3, optimize=is_optimize_slip, load=True)
+    buy_btc_safe = IntParameter(-300, 50, default=buy_params["buy_btc_safe"], optimize=True)
+    buy_btc_safe_1d = DecimalParameter(-0.5, -0.015, default=buy_params["buy_btc_safe_1d"], optimize=True)
+    antipump_threshold = DecimalParameter(0, 0.4, default=buy_params["antipump_threshold"], space="buy", optimize=True)
     antipump_threshold_2 = DecimalParameter(
         0, 0.4, default=buy_params["antipump_threshold_2"], space="buy", optimize=True
     )
@@ -290,9 +259,7 @@ class ichiV1_Marius(IStrategy):
         optimize=False,
         load=True,
     )  # Multi Offset
-    buy_threshold = DecimalParameter(
-        0.003, 0.012, default=buy_params["buy_threshold"], optimize=True
-    )
+    buy_threshold = DecimalParameter(0.003, 0.012, default=buy_params["buy_threshold"], optimize=True)
 
     #######################################################################
 
@@ -459,18 +426,12 @@ class ichiV1_Marius(IStrategy):
             return True
 
         if trade.buy_tag == "telsa_":
-            if (
-                (sell_reason in ["sell_signal"])
-                or (sell_reason in ["roi"])
-                or (sell_reason in ["trailing_stop_loss"])
-            ):
+            if (sell_reason in ["sell_signal"]) or (sell_reason in ["roi"]) or (sell_reason in ["trailing_stop_loss"]):
                 return False
 
         if last_candle is not None:
             if sell_reason in ["sell_signal"]:
-                if (last_candle["hma_50"] > last_candle["ema_100"]) and (
-                    last_candle["rsi"] < 45
-                ):  # *1.2
+                if (last_candle["hma_50"] > last_candle["ema_100"]) and (last_candle["rsi"] < 45):  # *1.2
                     return False
 
         if last_candle is not None:
@@ -504,10 +465,7 @@ class ichiV1_Marius(IStrategy):
     @informative("1d")
     def populate_indicators_1d(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe["age_filter_ok"] = (
-            dataframe["volume"]
-            .rolling(window=self.age_filter, min_periods=self.age_filter)
-            .min()
-            > 0
+            dataframe["volume"].rolling(window=self.age_filter, min_periods=self.age_filter).min() > 0
         )
         return dataframe
 
@@ -527,21 +485,15 @@ class ichiV1_Marius(IStrategy):
 
     def get_informative_indicators(self, metadata: dict):
 
-        dataframe = self.dp.get_pair_dataframe(
-            pair=metadata["pair"], timeframe=self.informative_timeframe
-        )
+        dataframe = self.dp.get_pair_dataframe(pair=metadata["pair"], timeframe=self.informative_timeframe)
 
         return dataframe
 
-    def informative_1h_indicators(
-        self, dataframe: DataFrame, metadata: dict
-    ) -> DataFrame:
+    def informative_1h_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         tik = time.perf_counter()
         assert self.dp, "DataProvider is required for multiple timeframes."
         # Get the informative pair
-        informative_1h = self.dp.get_pair_dataframe(
-            pair=metadata["pair"], timeframe=self.informative_timeframe
-        )
+        informative_1h = self.dp.get_pair_dataframe(pair=metadata["pair"], timeframe=self.informative_timeframe)
         # RSI
         informative_1h["rsi"] = ta.RSI(informative_1h, timeperiod=14)
         # Weekly average close price
@@ -552,14 +504,10 @@ class ichiV1_Marius(IStrategy):
     #######################################################################
     # Informative indicator for pump detection
 
-    def informative_15m_indicators(
-        self, dataframe: DataFrame, metadata: dict
-    ) -> DataFrame:
+    def informative_15m_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         assert self.dp, "DataProvider is required for multiple timeframes."
         # Get the informative pair
-        informative_15m = self.dp.get_pair_dataframe(
-            pair=metadata["pair"], timeframe=self.inf_15m
-        )
+        informative_15m = self.dp.get_pair_dataframe(pair=metadata["pair"], timeframe=self.inf_15m)
 
         informative_15m["max_flow_price"] = max_pump_detect_price_15m(
             informative_15m,
@@ -607,15 +555,11 @@ class ichiV1_Marius(IStrategy):
         else:
             btc_info_pair = "BTC/USDT"
 
-        btc_df = self.dp.get_pair_dataframe(
-            pair=btc_info_pair, timeframe=self.timeframe
-        )
+        btc_df = self.dp.get_pair_dataframe(pair=btc_info_pair, timeframe=self.timeframe)
         dataframe["btc_rsi"] = normalize(ta.RSI(btc_df, timeperiod=14), 0, 100)
 
         ### BTC protection
-        dataframe["btc_5m"] = self.dp.get_pair_dataframe("BTC/USDT", timeframe="5m")[
-            "close"
-        ]
+        dataframe["btc_5m"] = self.dp.get_pair_dataframe("BTC/USDT", timeframe="5m")["close"]
         btc_1d = (
             self.dp.get_pair_dataframe("BTC/USDT", timeframe="1d")[["date", "close"]]
             .rename(columns={"close": "btc"})
@@ -629,20 +573,13 @@ class ichiV1_Marius(IStrategy):
 
         # BTC 5m dump protection
         informative_past_source = (
-            informative_past["open"]
-            + informative_past["close"]
-            + informative_past["high"]
-            + informative_past["low"]
+            informative_past["open"] + informative_past["close"] + informative_past["high"] + informative_past["low"]
         ) / 4  # Get BTC price
-        informative_threshold = (
-            informative_past_source * self.buy_threshold.value
-        )  # BTC dump n% in 5 min
+        informative_threshold = informative_past_source * self.buy_threshold.value  # BTC dump n% in 5 min
         informative_past_delta = (
             informative_past["close"].shift(1) - informative_past["close"]
         )  # should be positive if dump
-        informative_diff = (
-            informative_threshold - informative_past_delta
-        )  # Need be larger than 0
+        informative_diff = informative_threshold - informative_past_delta  # Need be larger than 0
         dataframe["btc_threshold"] = informative_threshold
         dataframe["btc_diff"] = informative_diff
 
@@ -671,12 +608,8 @@ class ichiV1_Marius(IStrategy):
         dataframe["ema_200"] = ta.EMA(dataframe, timeperiod=200)
         dataframe["zema_30"] = ftt.zema(dataframe, period=30)
         dataframe["zema_200"] = ftt.zema(dataframe, period=200)
-        dataframe["pump_strength"] = (
-            dataframe["zema_30"] - dataframe["zema_200"]
-        ) / dataframe["zema_30"]
-        dataframe["pump_strength_2"] = (
-            dataframe["ema_50"] - dataframe["ema_200"]
-        ) / dataframe["ema_50"]
+        dataframe["pump_strength"] = (dataframe["zema_30"] - dataframe["zema_200"]) / dataframe["zema_30"]
+        dataframe["pump_strength_2"] = (dataframe["ema_50"] - dataframe["ema_200"]) / dataframe["ema_50"]
 
         heikinashi = qtpylib.heikinashi(dataframe)
         heikinashi["volume"] = dataframe["volume"]
@@ -703,12 +636,8 @@ class ichiV1_Marius(IStrategy):
         dataframe["trend_open_6h"] = ta.EMA(dataframe["open"], timeperiod=72)
         dataframe["trend_open_8h"] = ta.EMA(dataframe["open"], timeperiod=96)
 
-        dataframe["fan_magnitude"] = (
-            dataframe["trend_close_1h"] / dataframe["trend_close_8h"]
-        )
-        dataframe["fan_magnitude_gain"] = dataframe["fan_magnitude"] / dataframe[
-            "fan_magnitude"
-        ].shift(1)
+        dataframe["fan_magnitude"] = dataframe["trend_close_1h"] / dataframe["trend_close_8h"]
+        dataframe["fan_magnitude_gain"] = dataframe["fan_magnitude"] / dataframe["fan_magnitude"].shift(1)
 
         ichimoku = ftt.ichimoku(
             dataframe,
@@ -750,29 +679,17 @@ class ichiV1_Marius(IStrategy):
 
         # Import 15m indicators
         informative_15m = self.informative_15m_indicators(dataframe, metadata)
-        dataframe = merge_informative_pair(
-            dataframe, informative_15m, self.timeframe, self.inf_15m, ffill=True
-        )
+        dataframe = merge_informative_pair(dataframe, informative_15m, self.timeframe, self.inf_15m, ffill=True)
         drop_columns = [(s + "_" + self.inf_15m) for s in ["date"]]
-        dataframe.drop(
-            columns=dataframe.columns.intersection(drop_columns), inplace=True
-        )
+        dataframe.drop(columns=dataframe.columns.intersection(drop_columns), inplace=True)
 
         # Pump protection
-        dataframe["weekly_close_avg_offset"] = (
-            self.pump_recorver_price.value * dataframe["weekly_close_avg_1h"]
-        )
-        dataframe["price_test"] = (
-            dataframe["close"] > dataframe["weekly_close_avg_offset"]
-        )
-        dataframe["pump_price_test"] = (
-            dataframe["max_flow_price_15m"] > self.pump_limit.value
-        )
+        dataframe["weekly_close_avg_offset"] = self.pump_recorver_price.value * dataframe["weekly_close_avg_1h"]
+        dataframe["price_test"] = dataframe["close"] > dataframe["weekly_close_avg_offset"]
+        dataframe["pump_price_test"] = dataframe["max_flow_price_15m"] > self.pump_limit.value
 
         # Check if a pump uccured during pump_pause_duration and coin didn't recovered its pre pump value
-        dataframe["pump_dump_alert"] = (
-            dataframe["price_test"] & dataframe["pump_price_test"]
-        )
+        dataframe["pump_dump_alert"] = dataframe["price_test"] & dataframe["pump_price_test"]
         dataframe["buy_ok"] = np.where(dataframe["pump_dump_alert"], False, True)
 
         return dataframe
@@ -813,10 +730,7 @@ class ichiV1_Marius(IStrategy):
         dataframe.loc[:, "buy_tag"] = ""
 
         is_protection = (
-            (
-                pct_change(dataframe["btc_1d"], dataframe["btc_5m"]).fillna(0)
-                > self.buy_btc_safe_1d.value
-            )
+            (pct_change(dataframe["btc_1d"], dataframe["btc_5m"]).fillna(0) > self.buy_btc_safe_1d.value)
             & (dataframe["pump_strength_2"] < self.antipump_threshold_2.value)
             & (dataframe["buy_ok"])
             & (dataframe["volume"] > 0)
@@ -832,19 +746,14 @@ class ichiV1_Marius(IStrategy):
                 & (dataframe["ema21"] > dataframe["trend_close_4h"])
                 & (dataframe["trend_open_1h"] > dataframe["trend_open_2h"])
                 & (dataframe["mfi"] < 70)
-                & (
-                    dataframe["fan_magnitude_gain"]
-                    >= self.buy_min_fan_magnitude_gain.value
-                )
+                & (dataframe["fan_magnitude_gain"] >= self.buy_min_fan_magnitude_gain.value)
                 & (dataframe["fan_magnitude"] > 0.99)
             )
             conditions.append(tesla)
             dataframe.loc[tesla, "buy_tag"] += "tesla_"
 
         if conditions:
-            dataframe.loc[
-                is_protection & reduce(lambda x, y: x & y, conditions), "buy"
-            ] = 1
+            dataframe.loc[is_protection & reduce(lambda x, y: x & y, conditions), "buy"] = 1
 
         return dataframe
 
@@ -866,21 +775,12 @@ class ichiV1_Marius(IStrategy):
 
     def rollingNormalize(self, dataframe, name):
         df = dataframe.copy()
-        df[name + "_nmin"] = (
-            df[name].rolling(window=1440 // self.timeframe_minutes).min()
-        )
-        df[name + "_nmax"] = (
-            df[name].rolling(window=1440 // self.timeframe_minutes).max()
-        )
+        df[name + "_nmin"] = df[name].rolling(window=1440 // self.timeframe_minutes).min()
+        df[name + "_nmax"] = df[name].rolling(window=1440 // self.timeframe_minutes).max()
         return np.where(
             df[name + "_nmin"] == df[name + "_nmax"],
             0,
-            (
-                2.0
-                * (df[name] - df[name + "_nmin"])
-                / (df[name + "_nmax"] - df[name + "_nmin"])
-                - 1.0
-            ),
+            (2.0 * (df[name] - df[name + "_nmin"]) / (df[name + "_nmax"] - df[name + "_nmin"]) - 1.0),
         )
 
 
@@ -902,10 +802,7 @@ def HA(dataframe, smoothing=None):
     df.reset_index(inplace=True)
 
     ha_open = [(df["open"][0] + df["close"][0]) / 2]
-    [
-        ha_open.append((ha_open[i] + df["HA_Close"].values[i]) / 2)
-        for i in range(0, len(df) - 1)
-    ]
+    [ha_open.append((ha_open[i] + df["HA_Close"].values[i]) / 2) for i in range(0, len(df) - 1)]
     df["HA_Open"] = ha_open
 
     df.set_index("index", inplace=True)
